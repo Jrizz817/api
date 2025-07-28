@@ -43,7 +43,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { model, messages, temperature, chatId } = req.body;
+    const { model, messages, temperature, chatId, stream = false } = req.body;
 
     if (!model || !messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Campos obrigatórios: model, messages (array)' });
@@ -61,14 +61,14 @@ export default async function handler(req, res) {
       model,
       messages,
       temperature: temperature ?? 0.8,
-      stream: true
+      stream
     };
 
     const resp = await fetch(`${KIMI_API_URL}/chat/${idConversa}/completion/stream`, {
       method: 'POST',
       headers: {
         ...COMMON_HEADERS,
-        'Accept': 'text/event-stream, application/json'
+        'Accept': stream ? 'text/event-stream, application/json' : 'application/json'
       },
       body: JSON.stringify(bodyKimi)
     });
@@ -77,41 +77,70 @@ export default async function handler(req, res) {
       return res.status(resp.status).json({ error: 'Erro na API Kimi', status: resp.status });
     }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let respostaBot = '';
+    if (!stream) {
+      // Stream OFF: lê JSON inteiro direto
+      const data = await resp.json();
+      const responsePayload = { response: data.text || data.answer || JSON.stringify(data) };
+      if (novoChatCriado) responsePayload.chatId = idConversa;
+      return res.status(200).json(responsePayload);
+    } else {
+      // Stream ON: lê resposta em stream no Node.js Readable (sem getReader)
+      return new Promise((resolve, reject) => {
+        let respostaBot = '';
+        let buffer = '';
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const linhas = buffer.split('\n');
-      buffer = linhas.pop();
+        resp.body.on('data', (chunk) => {
+          buffer += chunk.toString();
+          let linhas = buffer.split('\n');
+          buffer = linhas.pop(); // última linha incompleta
 
-      for (const linha of linhas) {
-        if (!linha.startsWith('data:')) continue;
-        try {
-          const jsonStr = linha.replace(/^data:\s*/, '');
-          if (jsonStr === '[DONE]') break;
-          const json = JSON.parse(jsonStr);
-          if (json.event === 'cmpl' && json.text) {
-            respostaBot += json.text;
+          for (const linha of linhas) {
+            if (!linha.startsWith('data:')) continue;
+            try {
+              const jsonStr = linha.replace(/^data:\s*/, '');
+              if (jsonStr === '[DONE]') {
+                // Finalizou stream
+                const responsePayload = { response: respostaBot.trim() };
+                if (novoChatCriado) responsePayload.chatId = idConversa;
+                res.status(200).json(responsePayload);
+                resolve();
+                return;
+              }
+              const json = JSON.parse(jsonStr);
+              if (json.event === 'cmpl' && json.text) {
+                respostaBot += json.text;
+              }
+              if (json.event === 'error') {
+                res.status(500).json({ error: json.message || 'Erro desconhecido da API Kimi' });
+                reject(new Error(json.message));
+                return;
+              }
+            } catch (e) {
+              // ignora erros JSON
+            }
           }
-          if (json.event === 'error') {
-            return res.status(500).json({ error: json.message || 'Erro desconhecido da API Kimi' });
+        });
+
+        resp.body.on('end', () => {
+          if (!res.writableEnded) {
+            const responsePayload = { response: respostaBot.trim() };
+            if (novoChatCriado) responsePayload.chatId = idConversa;
+            res.status(200).json(responsePayload);
+            resolve();
           }
-        } catch {}
-      }
+        });
+
+        resp.body.on('error', (err) => {
+          if (!res.writableEnded) {
+            res.status(500).json({ error: err.message || 'Erro no stream' });
+          }
+          reject(err);
+        });
+      });
     }
-
-    const responsePayload = { response: respostaBot.trim() };
-    if (novoChatCriado) responsePayload.chatId = idConversa;
-
-    return res.status(200).json(responsePayload);
 
   } catch (err) {
     console.error(err);
-    return res.status(500).json({ error: err.message || 'Erro interno' });
+    res.status(500).json({ error: err.message || 'Erro interno' });
   }
 }
