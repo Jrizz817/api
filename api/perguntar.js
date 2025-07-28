@@ -1,4 +1,13 @@
 export default async function handler(req, res) {
+  // Cabeçalhos CORS para permitir chamadas do browser
+  res.setHeader('Access-Control-Allow-Origin', '*'); // ou especifique seu domínio
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.status(200).end(); // Responde preflight CORS
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Método não permitido' });
   }
@@ -24,8 +33,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    // Se não tiver ID, cria nova conversa
     let chatId = id;
+
+    // Se não tiver ID, cria nova conversa
     if (!chatId) {
       const conversaRes = await fetch('https://www.kimi.com/api/chat', {
         method: 'POST',
@@ -41,6 +51,7 @@ export default async function handler(req, res) {
       });
 
       const conversaJson = await conversaRes.json();
+
       if (!conversaJson.id) {
         return res.status(500).json({ error: 'Erro ao criar nova conversa' });
       }
@@ -48,7 +59,7 @@ export default async function handler(req, res) {
       chatId = conversaJson.id;
     }
 
-    // Envia pergunta
+    // Envia pergunta e obtém resposta em stream
     const resp = await fetch(`https://www.kimi.com/api/chat/${chatId}/completion/stream`, {
       method: 'POST',
       headers,
@@ -86,8 +97,9 @@ export default async function handler(req, res) {
       }
 
       res.end();
+
     } else {
-      // Não stream: agrupa resposta
+      // Se não for stream, junta tudo e responde JSON
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let respostaFinal = '';
@@ -114,6 +126,7 @@ export default async function handler(req, res) {
 
       return res.status(200).json({ id: chatId, content: respostaFinal });
     }
+
   } catch (error) {
     console.error(error);
     return res.status(500).json({ error: 'Erro ao se conectar com a API do Kimi' });
