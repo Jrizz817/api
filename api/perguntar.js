@@ -78,34 +78,33 @@ export default async function handler(req, res) {
     }
 
     if (!stream) {
-      // Stream OFF: lê JSON inteiro direto
+      // Stream OFF: lê JSON puro direto
       const data = await resp.json();
       const responsePayload = { response: data.text || data.answer || JSON.stringify(data) };
       if (novoChatCriado) responsePayload.chatId = idConversa;
       return res.status(200).json(responsePayload);
     } else {
-      // Stream ON: lê resposta em stream no Node.js Readable (sem getReader)
+      // Stream ON: lê SSE manualmente no Node.js
       return new Promise((resolve, reject) => {
         let respostaBot = '';
         let buffer = '';
 
         resp.body.on('data', (chunk) => {
           buffer += chunk.toString();
-          let linhas = buffer.split('\n');
-          buffer = linhas.pop(); // última linha incompleta
+          const linhas = buffer.split('\n');
+          buffer = linhas.pop();
 
           for (const linha of linhas) {
             if (!linha.startsWith('data:')) continue;
+            const jsonStr = linha.replace(/^data:\s*/, '');
+            if (jsonStr === '[DONE]') {
+              const responsePayload = { response: respostaBot.trim() };
+              if (novoChatCriado) responsePayload.chatId = idConversa;
+              res.status(200).json(responsePayload);
+              resolve();
+              return;
+            }
             try {
-              const jsonStr = linha.replace(/^data:\s*/, '');
-              if (jsonStr === '[DONE]') {
-                // Finalizou stream
-                const responsePayload = { response: respostaBot.trim() };
-                if (novoChatCriado) responsePayload.chatId = idConversa;
-                res.status(200).json(responsePayload);
-                resolve();
-                return;
-              }
               const json = JSON.parse(jsonStr);
               if (json.event === 'cmpl' && json.text) {
                 respostaBot += json.text;
@@ -115,7 +114,7 @@ export default async function handler(req, res) {
                 reject(new Error(json.message));
                 return;
               }
-            } catch (e) {
+            } catch {
               // ignora erros JSON
             }
           }
