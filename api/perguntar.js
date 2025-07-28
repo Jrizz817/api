@@ -1,4 +1,3 @@
-// /api/chat.js
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Método não permitido' });
@@ -18,32 +17,39 @@ export default async function handler(req, res) {
     'Referer': 'https://www.kimi.com/'
   };
 
-  const { messages, stream = false } = req.body;
+  const { messages, stream = false, id } = req.body;
 
   if (!messages || !Array.isArray(messages) || messages.length === 0) {
     return res.status(400).json({ error: 'Mensagens inválidas' });
   }
 
   try {
-    // 1. Cria nova conversa
-    const conversaRes = await fetch('https://www.kimi.com/api/chat', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        name: "未命名会话",
-        born_from: "home",
-        kimiplus_id: "kimi",
-        is_example: false,
-        source: "web",
-        tags: []
-      })
-    });
+    // Se não tiver ID, cria nova conversa
+    let chatId = id;
+    if (!chatId) {
+      const conversaRes = await fetch('https://www.kimi.com/api/chat', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          name: "未命名会话",
+          born_from: "home",
+          kimiplus_id: "kimi",
+          is_example: false,
+          source: "web",
+          tags: []
+        })
+      });
 
-    const conversaJson = await conversaRes.json();
-    const id = conversaJson.id;
+      const conversaJson = await conversaRes.json();
+      if (!conversaJson.id) {
+        return res.status(500).json({ error: 'Erro ao criar nova conversa' });
+      }
 
-    // 2. Requisição de resposta
-    const resp = await fetch(`https://www.kimi.com/api/chat/${id}/completion/stream`, {
+      chatId = conversaJson.id;
+    }
+
+    // Envia pergunta
+    const resp = await fetch(`https://www.kimi.com/api/chat/${chatId}/completion/stream`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ messages, temperature: 0.8, stream: true })
@@ -106,7 +112,7 @@ export default async function handler(req, res) {
         }
       }
 
-      return res.status(200).json({ content: respostaFinal });
+      return res.status(200).json({ id: chatId, content: respostaFinal });
     }
   } catch (error) {
     console.error(error);
